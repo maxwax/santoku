@@ -1,0 +1,401 @@
+#!/bin/bash
+
+#
+# A wrapper for Chef's 'knife ssh' which makes it more secure & easy to use
+#
+# Copyright 2015 Maxwell Spangler, maxwell@maxwellspangler.com
+#
+
+# Set the version
+VERSION="2015.0404.01"
+
+# Define a config file location
+CONFIG_FILE=$HOME/.santoku-config
+
+#
+# Functions
+#
+
+function usage {
+  echo "santoku $VERSION"
+  echo
+  echo "Syntax: $ santoku [options] <environment> <command>"
+  echo
+  echo "Examples:"
+  echo
+  echo "$ santoku prod ssh \"name:mynode1*.company.com\" \"df -h\""
+  echo
+  echo "$ santoku dev ssh \"name:mynode1*.company.com\" \"date\""
+  echo
+}
+
+# Capture the environment name and chef commands
+function capture_parameters {
+
+  # We might get called twice, so reset this each time we get called
+  CLI_ENV=""
+  CLI_COMMAND=""
+
+  # Capture environment
+  if [[ "$1" != "" ]]
+  then
+    CLI_ENV="$1"
+
+    # Bump the environment name out of the parameters
+    # we're now left with only info that will be passed through to chef
+    shift
+
+    if [[ "$1" != "" ]]
+    then
+      # Capture ALL remaining parameters 
+      # We want to pass through unexpected knife commands, too
+      CLI_COMMAND="$@"
+    fi
+
+  fi
+
+  if [[ -n "$DEBUG" ]]
+  then
+    echo "[CLI environment] $CLI_ENV"
+    echo "[CLI command    ] $CLI_COMMAND"
+  fi
+
+  # If we didn't get a triplet of these variables, error out
+  if [[ ! -n "$CLI_ENV" || ! -n "$CLI_COMMAND" ]]
+  then
+    echo "Error: I didn't see parameters <environment> <command>"
+    exit 1
+  fi
+}
+
+# Load items from a config file, or make a template for the user.
+function load_config_file {
+
+  # Do we have a readable config file?
+  if [[ -r $CONFIG_FILE ]]
+  then
+
+    # Set the input field seperator to "," so values with spaces ("one two") work
+    IFS=","
+
+    # Start storing config items at array element 0
+    IDX=0
+
+    # Counter used to report errors on input file
+    INPUT_LINE=0
+
+    # Read in these fields from the file
+    while read LOAD_ENV LOAD_DESC LOAD_KNIFE LOAD_USER LOAD_PASS
+    do
+
+      ((INPUT_LINE++))
+
+      # Process this line as long as it is NOT commented out
+      if [[ ${LOAD_ENV:0:1} != "#" ]]
+      then
+
+        if [[ ! -n "$LOAD_ENV" || ! -n "$LOAD_DESC" || ! -n "$LOAD_KNIFE" || \
+              ! -n "$LOAD_USER" || ! -N "$LOAD_PASS" ]]
+        then
+
+          if [[ ! -n "$LOAD_ENV" ]]
+          then
+            echo "Config file error on line $INPUT_LINE: the environment name is not set."
+            exit 1
+          fi
+
+          if [[ ! -n "$LOAD_DESC" ]]
+          then
+            echo "Config file error on line $INPUT_LINE: the description is not set."
+            exit 1
+          fi
+
+          if [[ ! -n "$LOAD_KNIFE" ]]
+          then
+            echo "Config file error on line $INPUT_LINE: the knife config file is not set."
+            exit 1
+          fi
+
+          if [[ ! -n "$LOAD_USER" ]]
+          then
+            echo "Config file error on line $INPUT_LINE: the default user is not set."
+            exit 1
+          fi
+
+          if [[ ! -n "$LOAD_PASS" ]]
+          then
+            echo "Config file error on line $INPUT_LINE: the password key is not set."
+            exit 1
+          fi
+
+        fi
+
+        LIST_ENV[$IDX]="$LOAD_ENV"
+        LIST_DESC[$IDX]="$LOAD_DESC"
+        LIST_KNIFE[$IDX]="$LOAD_KNIFE"
+        LIST_USER[$IDX]="$LOAD_USER"
+        LIST_PASS[$IDX]="$LOAD_PASS"
+
+        if [[ -n "$DEBUG" ]]
+        then
+          echo
+          echo "Counter is $IDX"
+          echo "LOAD_ENV   $LOAD_ENV"
+          echo "LOAD_DESC  $LOAD_DESC"
+          echo "LOAD_KNIFE $LOAD_KNIFE"
+          echo "LOAD_USER  $LOAD_USER"
+          echo "LOAD_PASS  $LOAD_PASS"
+        fi
+
+        # Increment our counter by 1
+        ((IDX++))
+
+      fi
+    done < $CONFIG_FILE
+
+    # We're done reading, reset this
+    unset IFS
+
+    # Set how many environments we found
+    LIST_COUNT=${#LIST_ENV[@]}
+    LIST_COUNT_ZERO_START=$((LIST_COUNT-1))
+
+  else
+    cat > $CONFIG_FILE << CONFIG_TEMPLATE
+#
+# Configuration file for santoku, a Chef 'knife' wrapper
+#
+environment-nickname,"Environment description","~/.chef/sample-chef-config.rb","username,password-key"
+my-dev,"My development environment","~/.chef/knife.rb","root","my-keys/my-dev-root-pass"
+#
+#[environment]
+#description=This is the production environment
+#name=prod
+#knife_config=/home/user/.chef/knife.rb
+#ssh_user=maxwell
+#pass_key="Lab/prod-maxwell"
+
+CONFIG_TEMPLATE
+
+    echo "I've created a sample $HOME/.santoku-config file for you."
+    echo "Please edit it with the appropriate knife config values."
+    exit 0
+  fi
+}
+
+# List all entries in the configuration file
+function list_config_items {
+  echo "You have $LIST_COUNT items in your configuration file:"
+  echo
+  for IDX in $(seq 0 $LIST_COUNT_ZERO_START)
+  do
+    echo "${LIST_ENV[$IDX]}"
+    echo "    ${LIST_DESC[$IDX]}"
+    echo "    ${LIST_KNIFE[$IDX]}"
+    echo "    ${LIST_USER[$IDX]}"
+    echo "    ${LIST_PASS[$IDX]}"
+    echo
+  done
+}
+
+#
+# Initialization
+#
+
+# Create new environments array
+declare -a LIST_ENV
+declare -a LIST_DESC
+declare -a LIST_KNIFE
+declare -a LIST_USER
+declare -a LIST_PASS
+
+# Operational (non-option) parameters provided by the user
+CLI_ENV=""
+CLI_SELECT=""
+CLI_COMMAND=""
+
+# Declare these here for global scope use later
+DEBUG=""
+SAVE_HTTP_PROXY=""
+SAVE_HTTPS_PROXY=""
+SAVE_FTP=""
+SAVE_NO_PROXY=""
+
+# Number of elements in the LIST_ array. Counted first as 1-n, then as 0-n
+LIST_COUNT=0
+LIST_COUNT_ZERO_START=0
+
+#
+# Command line parameters
+#
+
+# User provided no parameters, just show --help"
+if [[ $1 == "" ]]
+then
+  echo "Error: Santoku requires parameters to work."
+  usage
+  exit 1
+fi
+
+# While length of $1 is not zero
+while [ "$1" != "" ]  
+do
+
+  case $1 in
+
+    # Debug mode
+    "--debug" )
+      DEBUG=true;;
+
+    # List configuration file entries
+    "--list" )
+      load_config_file
+      list_config_items
+      exit 0;;
+
+    # I don't know what I want! Help me!
+    "-h" | "--help" | "--syntax") 
+      usage
+      exit 0;;
+
+    # NO dash in front means <env> <selection> <cmd> should be seen
+    *)
+
+      # dash or dash-dash commands seen here are unknown and an error
+      # non-dash content should be our knife parameters
+      if [[ ${1:0:1} == "-" || ${1:0:2} == "--" ]]
+      then
+        echo "Error: I don't know the option: $1"
+        exit 1
+      else
+        # Pass all CLI variables to capture_parameters to load knife parameters
+        capture_parameters ${@}
+
+        # shift the environment out of the way so our $@ variable can be
+        # passed on to knife without processing
+        shift
+
+        # We don't want to do anything else with the rest of the line, stop now
+        break
+      fi
+    ;;
+  esac 
+
+  shift
+done 
+
+#
+# Config file: Read one in or make a template file
+#
+
+# If a config file is readable, let's load it
+load_config_file
+
+
+# Report config file for debugging
+if [[ -n "$DEBUG" ]]
+then
+  list_config_items
+fi
+
+#
+# Find our configuration info using the command line parameter
+#
+
+# Default to empty
+USE_ENV=""
+
+for IDX in $(seq 0 $LIST_COUNT_ZERO_START)
+do
+  if [[ -n "$DEBUG" ]]
+  then
+    echo ${LIST_ENV[$IDX]} "|" $CLI_ENV 
+  fi
+
+  # If this array element matches our selected environment, use its values
+  if [[ ${LIST_ENV[$IDX]} == $CLI_ENV ]]
+  then
+    if [[ -n "$DEBUG" ]]
+    then
+      echo "[Found Env] | ${LIST_ENV[$IDX]} | ${LIST_DESC[$IDX]} | ${LIST_KNIFE[$IDX]} | ${LIST_USER[$IDX]} | ${LIST_PASS[$IDX]}"
+    fi
+
+    # Capture array values; later use will be more readable than array accesses
+    USE_ENV="${LIST_ENV[$IDX]}"
+    USE_DESC="${LIST_DESC[$IDX]}"
+    USE_KNIFE="${LIST_KNIFE[$IDX]}"
+    USE_USER="${LIST_USER[$IDX]}"
+    USE_PASS="${LIST_PASS[$IDX]}"
+
+    # Stop searching the array
+    break
+  fi
+done
+
+# Verify that we found an environment
+if [[ ! -n "$USE_ENV" ]]
+then
+  echo "Error: No environment named '$CLI_ENV' was found in the config file."
+  exit 1
+fi
+
+# If we're doing 'knife ssh' provide a username and password
+if [[ $1 == "ssh" ]]
+then
+
+  # If the config file has this phrase for a password key,
+  # then we will interactively ask the user for a password instead of
+  # using a key store
+  if [[ $USE_PASS != "ASK-ME" ]]
+  then
+
+    #
+    # Obtain a password from the keystore using 'pass'
+    #
+
+    # Call the 'pass' with a password key name and return a password
+    USE_PASSWORD=$(pass "$USE_PASS" | grep -v WARNING 2>&1 )
+    PASSWORD_ERROR=$?
+    if [[ $PASSWORD_ERROR != 0 ]]
+    then
+      echo "Error: I can't obtain a password via 'pass' for $USE_PASS"
+      exit 1
+    else
+      if [[ -n "$DEBUG" ]]
+      then
+        echo "USE_PASSWORD $USE_PASSWORD"
+      fi
+    fi
+  else
+
+    # Ask the user for a password
+    read -s -p "Specify a password for $USE_USER :" USE_PASSWORD
+    
+    # Force newline since read appears to capture the newline
+    echo
+
+    # Verify that we got something from the user
+    if [[ ! -n "$USE_PASSWORD" ]]
+    then
+      echo "Error: No password specified for knife ssh."
+      exit 1
+    fi
+
+  fi
+
+  if [[ -n "$DEBUG" ]]
+  then
+    echo knife "$@" --config "$USE_KNIFE" -x $USE_USER -P $USE_PASSWORD
+  fi
+
+  # Call knife with a password to facilitate 'knife ssh'
+  knife "$@" --config "$USE_KNIFE" -x $USE_USER -P $USE_PASSWORD
+else
+  if [[ -n "$DEBUG" ]]
+  then
+    echo knife "$@" --config "$USE_KNIFE"
+  fi
+
+  # Call knife without a password
+  knife "$@" --config "$USE_KNIFE"
+fi

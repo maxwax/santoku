@@ -7,7 +7,7 @@
 #
 
 # Set the version
-VERSION="2015.0404.01"
+VERSION="2015.0504.01"
 
 # Define a config file location
 CONFIG_FILE=$HOME/.santoku-config
@@ -19,7 +19,7 @@ CONFIG_FILE=$HOME/.santoku-config
 function usage {
   echo "santoku $VERSION"
   echo
-  echo "Syntax: $ santoku [options] <environment> <command>"
+  echo "Syntax: $ santoku [options] <resource> <command>"
   echo
   echo "Examples:"
   echo
@@ -29,19 +29,19 @@ function usage {
   echo
 }
 
-# Capture the environment name and chef commands
+# Capture the resource name and chef commands
 function capture_parameters {
 
   # We might get called twice, so reset this each time we get called
   CLI_ENV=""
   CLI_COMMAND=""
 
-  # Capture environment
+  # Capture resource
   if [[ "$1" != "" ]]
   then
     CLI_ENV="$1"
 
-    # Bump the environment name out of the parameters
+    # Bump the resource name out of the parameters
     # we're now left with only info that will be passed through to chef
     shift
 
@@ -56,20 +56,289 @@ function capture_parameters {
 
   if [[ -n "$DEBUG" ]]
   then
-    echo "[CLI environment] $CLI_ENV"
+    echo "[CLI resource] $CLI_ENV"
     echo "[CLI command    ] $CLI_COMMAND"
   fi
 
   # If we didn't get a triplet of these variables, error out
   if [[ ! -n "$CLI_ENV" || ! -n "$CLI_COMMAND" ]]
   then
-    echo "Error: I didn't see parameters <environment> <command>"
+    echo "Error: I didn't see parameters <resource> <command>"
     exit 1
   fi
 }
 
-# Load items from a config file, or make a template for the user.
 function load_config_file {
+
+  if [[ ! -r "$CONFIG_FILE" ]]
+  then
+
+    if [[ ! -f "$CONFIG_FILE" ]]
+    then
+      echo "Error: There is no config file at $CONFIG_FILE"
+    else
+      echo "Error: The config file at $CONFIG_FILE is not accessible."
+    fi
+    exit 1
+  else
+
+    # Initialize defaults
+    IDX=0
+
+    # Default the section we're processing to empty
+    SECTION_NAME=""
+
+    while read INPUT_LINE
+    do
+
+      #echo "READ: $INPUT_LINE"
+
+      # If the line is not a comment and not empty
+      if [[ ${INPUT_LINE:0:1} != "#" ]]
+      then
+
+        if [[ ${INPUT_LINE:0:1} == "[" && ${INPUT_LINE:0:5} != "[end]" ]]
+        then
+          #echo "Found name"
+
+          # If we're already processing a section and we see the start of
+          # a new one, our config file isn't clean, so bail out
+          if [[ $SECTION_NAME != "" ]]
+          then
+            echo "Error: Your config file has a syntax error in section $SECTION_NAME"
+            echo "Error: A new section name was encountered before the last one ended."
+
+            exit 1
+          else
+
+            # Capture the name minus the first [
+            SECTION_NAME=${INPUT_LINE:1}
+
+            # Check for a trailing ] here, if not bail out.
+
+            # Remove the trailing ]
+            SECTION_NAME=${SECTION_NAME%%]}
+
+            # Default all of these to empty
+            SECTION_DESC=""
+            SECTION_KNIFE_CFG=""
+            SECTION_SSH_USER=""
+            SECTION_PASS_KEY=""
+
+          fi
+
+        elif [[ ${INPUT_LINE:0:12} == "description=" ]]
+        then
+          #echo "Found description"
+
+          # Verify that we do not already have a description
+          # If we do, we're seeing a second for this section, so BAIL OUT
+          if [[ $SECTION_DESC != "" ]]
+          then
+            echo "Error: Your config file has a syntax error in section $SECTION_NAME"
+            echo "Error: A second description declaration was encountered."
+            exit 1
+          else
+            # Capture the description
+            SECTION_DESC=${INPUT_LINE:12}
+          fi
+
+        elif [[ ${INPUT_LINE:0:13} == "knife_config=" ]]
+        then
+          #echo "Found knife_config"
+
+          # Verify that we do not already have a knife config file
+          # If we do, we're seeing a second for this section, so BAIL OUT
+          if [[ $SECTION_KNIFE_CFG != "" ]]
+          then
+            echo "Error: Your config file has a syntax error in section $SECTION_NAME"
+            echo "Error: A second config file declaration was encountered."
+            exit 1
+          else
+            # Capture the knife config
+            SECTION_KNIFE_CFG=${INPUT_LINE:13}
+          fi
+
+
+        elif [[ ${INPUT_LINE:0:15} == "knife_ssh_user=" ]]
+        then
+          #echo "Found knife_ssh_user"
+
+          # Verify that we do not already have an ssh user
+          # If we do, we're seeing a second for this section, so BAIL OUT
+          if [[ $SECTION_SSH_USER != "" ]]
+          then
+            echo "Error: Your config file has a syntax error in section $SECTION_NAME"
+            echo "Error: A second ssh user declaration was encountered."
+            exit 1
+          else
+            # Capture the ssh user
+            SECTION_SSH_USER=${INPUT_LINE:15}
+          fi
+
+        elif [[ ${INPUT_LINE:0:9} == "pass_key=" ]]
+        then
+          #echo "Found pass_key"
+
+          # Verify that we do not already have a pass key
+          # If we do, we're seeing a second for this section, so BAIL OUT
+          if [[ $SECTION_PASS_KEY != "" ]]
+          then
+            echo "Error: Your config file has a syntax error in section $SECTION_NAME"
+            echo "Error: A second pass key declaration was encountered."
+            exit 1
+          else
+            # Capture the pass key
+            SECTION_PASS_KEY=${INPUT_LINE:9}
+          fi
+
+        elif [[ ${INPUT_LINE:0:8} == "confirm=" ]]
+        then
+          #echo "Found confirm"
+
+          # Verify that we do not already have a confirm value
+          # If we do, we're seeing a second for this section, so BAIL OUT
+          if [[ $SECTION_CONFIRM != "" ]]
+          then
+            echo "Error: Your config file has a syntax error in section $SECTION_NAME"
+            echo "Error: A second confirm value declaration was encountered."
+            exit 1
+          else
+            # Capture the confirm value
+            SECTION_CONFIRM=${INPUT_LINE:8}
+          fi
+
+        elif [[ ${INPUT_LINE:0:5} == "[end]" || -z $INPUT_LINE ]]
+        then
+          #echo "Found [end] or empty line"
+
+          if [[ $SECTION_NAME == "" || -z $INPUT_LINE ]]
+          then
+            #echo "Ignoring blank line"
+            a=0
+
+          else
+
+            # If we're processing a section 
+            # and any parameter is missing, bail out
+            if [[ $SECTION_NAME      != "" && \
+                  $SECTION_DESC      == "" || \
+                  $SECTION_KNIFE_CFG == "" || \
+                  $SECTION_SSH_USER  == "" || \
+                  $SECTION_PASS_KEY  == "" || \
+                  $SECTION_CONFIRM   == "" ]]
+            then
+              echo "Error: Section $SECTION_NAME is missing a value."
+
+              if [[ -z $SECTION_DESC ]]
+              then
+                echo "Error: Missing 'description=' declaration"
+              fi
+
+              if [[ -z $SECTION_KNIFE_CFG ]]
+              then
+                echo "Error: Missing 'knife_config=' declaration"
+              fi
+
+              if [[ -z $SECTION_SSH_USER ]]
+              then
+                echo "Error: Missing 'ssh_user=' declaration"
+              fi
+
+              if [[ -z $SECTION_PASS_KEY ]]
+              then
+                echo "Error: Missing 'pass_key=' declaration"
+              fi
+
+              if [[ -z $SECTION_CONFIRM ]]
+              then
+                echo "Error: Missing 'confirm=' declaration"
+              fi
+
+              exit 1
+            fi
+
+            # If we're processing a section and we have ALL parameters needed
+            # Validate the parameters then add it to our array of chef configs
+            if [[ $SECTION_NAME      != "" && \
+                  $SECTION_DESC      != "" && \
+                  $SECTION_KNIFE_CFG != "" && \
+                  $SECTION_SSH_USER  != "" && \
+                  $SECTION_PASS_KEY  != "" && \
+                  $SECTION_CONFIRM   != "" ]]
+            then
+
+              # Validate that the knife config file is readable
+              if [[ ! -r "$SECTION_KNIFE_CFG" ]]
+              then
+
+                echo "Error in section $SECTION_NAME"
+
+                if [[ ! -f "$SECTION_KNIFE_CFG" ]]
+                then
+                  echo "Error: There is no knife config file at $SECTION_KNIFE_CFG"
+                else
+                  echo "Error: The knife config file at $SECTION_KNIFE_CFG is not accessible."
+                fi
+                exit 1
+              else
+
+                #echo
+                #echo "SECTION:           |$SECTION_NAME|"
+                #echo "SECTION_DESC:      |$SECTION_DESC|"
+                #echo "SECTION_KNIFE_CFG: |$SECTION_KNIFE_CFG|"
+                #echo "SECTION_SSH_USER:  |$SECTION_SSH_USER|"
+                #echo "SECTION_PASS_KEY:  |$SECTION_PASS_KEY|"
+                #echo "SECTION_CONFIRM:   |$SECTION_CONFIRM|"
+
+                LIST_ENV[$IDX]="$SECTION_NAME"
+                LIST_DESC[$IDX]="$SECTION_DESC"
+                LIST_KNIFE[$IDX]="$SECTION_KNIFE_CFG"
+                LIST_USER[$IDX]="$SECTION_SSH_USER"
+                LIST_PASS[$IDX]="$SECTION_PASS_KEY"
+                LIST_CONFIRM[$IDX]="$SECTION_CONFIRM"
+
+                if [[ -n "$DEBUG" ]]
+                then
+                  echo
+                  echo "Counter is $IDX"
+                  echo "LIST_ENV     |${LIST_ENV[$IDX]}|"
+                  echo "LIST_DESC    |${LIST_DESC[$IDX]}|"
+                  echo "LIST_KNIFE   |${LIST_KNIFE[$IDX]}|"
+                  echo "LIST_USER    |${LIST_USER[$IDX]}|"
+                  echo "LIST_PASS    |${LIST_PASS[$IDX]}|"
+                  echo "LIST_CONFIRM |${LIST_PASS[$IDX]}|"
+                fi
+
+                # Increment our counter by 1 for next element
+                ((IDX++))
+
+                # Reset all to empty
+                SECTION_NAME=""
+                SECTION_DESC=""
+                SECTION_KNIFE_CFG=""
+                SECTION_SSH_USER=""
+                SECTION_PASS_KEY=""
+                SECTION_CONFIRM=""
+            
+              fi
+            fi
+          fi
+        fi
+      fi
+
+    done < $CONFIG_FILE
+
+  fi
+
+  # Set how many resources we found
+  LIST_COUNT=${#LIST_ENV[@]}
+  LIST_COUNT_ZERO_START=$((LIST_COUNT-1))
+
+}
+
+# Load items from a config file, or make a template for the user.
+function load_config_file_old {
 
   # Do we have a readable config file?
   if [[ -r $CONFIG_FILE ]]
@@ -100,7 +369,7 @@ function load_config_file {
 
           if [[ ! -n "$LOAD_ENV" ]]
           then
-            echo "Config file error on line $INPUT_LINE: the environment name is not set."
+            echo "Config file error on line $INPUT_LINE: the resource name is not set."
             exit 1
           fi
 
@@ -156,7 +425,7 @@ function load_config_file {
     # We're done reading, reset this
     unset IFS
 
-    # Set how many environments we found
+    # Set how many resources we found
     LIST_COUNT=${#LIST_ENV[@]}
     LIST_COUNT_ZERO_START=$((LIST_COUNT-1))
 
@@ -165,11 +434,11 @@ function load_config_file {
 #
 # Configuration file for santoku, a Chef 'knife' wrapper
 #
-environment-nickname,"Environment description","~/.chef/sample-chef-config.rb","username,password-key"
-my-dev,"My development environment","~/.chef/knife.rb","root","my-keys/my-dev-root-pass"
+resource-nickname,"Environment description","~/.chef/sample-chef-config.rb","username,password-key"
+my-dev,"My development resource","~/.chef/knife.rb","root","my-keys/my-dev-root-pass"
 #
-#[environment]
-#description=This is the production environment
+#[resource]
+#description=This is the production resource
 #name=prod
 #knife_config=/home/user/.chef/knife.rb
 #ssh_user=maxwell
@@ -189,11 +458,12 @@ function list_config_items {
   echo
   for IDX in $(seq 0 $LIST_COUNT_ZERO_START)
   do
-    echo "${LIST_ENV[$IDX]}"
-    echo "    ${LIST_DESC[$IDX]}"
-    echo "    ${LIST_KNIFE[$IDX]}"
-    echo "    ${LIST_USER[$IDX]}"
-    echo "    ${LIST_PASS[$IDX]}"
+    echo "Resource: ${LIST_ENV[$IDX]}"
+    echo "    Description:  ${LIST_DESC[$IDX]}"
+    echo "    Knife Config: ${LIST_KNIFE[$IDX]}"
+    echo "    SSH User:     ${LIST_USER[$IDX]}"
+    echo "    PASS Key:     ${LIST_PASS[$IDX]}"
+    echo "    Confirm SSH:  ${LIST_CONFIRM[$IDX]}"
     echo
   done
 }
@@ -202,12 +472,13 @@ function list_config_items {
 # Initialization
 #
 
-# Create new environments array
+# Create new resources array
 declare -a LIST_ENV
 declare -a LIST_DESC
 declare -a LIST_KNIFE
 declare -a LIST_USER
 declare -a LIST_PASS
+declare -a LIST_CONFIRM
 
 # Operational (non-option) parameters provided by the user
 CLI_ENV=""
@@ -271,7 +542,7 @@ do
         # Pass all CLI variables to capture_parameters to load knife parameters
         capture_parameters ${@}
 
-        # shift the environment out of the way so our $@ variable can be
+        # shift the resource out of the way so our $@ variable can be
         # passed on to knife without processing
         shift
 
@@ -291,6 +562,7 @@ done
 # If a config file is readable, let's load it
 load_config_file
 
+#exit 1
 
 # Report config file for debugging
 if [[ -n "$DEBUG" ]]
@@ -312,7 +584,7 @@ do
     echo ${LIST_ENV[$IDX]} "|" $CLI_ENV 
   fi
 
-  # If this array element matches our selected environment, use its values
+  # If this array element matches our selected resource, use its values
   if [[ ${LIST_ENV[$IDX]} == $CLI_ENV ]]
   then
     if [[ -n "$DEBUG" ]]
@@ -332,10 +604,10 @@ do
   fi
 done
 
-# Verify that we found an environment
+# Verify that we found an resource
 if [[ ! -n "$USE_ENV" ]]
 then
-  echo "Error: No environment named '$CLI_ENV' was found in the config file."
+  echo "Error: No resource named '$CLI_ENV' was found in the config file."
   exit 1
 fi
 

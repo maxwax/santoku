@@ -124,6 +124,7 @@ function load_config_file {
             SECTION_KNIFE_CFG=""
             SECTION_SSH_USER=""
             SECTION_PASS_KEY=""
+            SECTION_TSOCKS=""
 
           fi
 
@@ -192,6 +193,22 @@ function load_config_file {
             SECTION_PASS_KEY=${INPUT_LINE:9}
           fi
 
+        elif [[ ${INPUT_LINE:0:7} == "tsocks=" ]]
+        then
+          #echo "Found tsocks"
+
+          # Verify that we do not already have a setting for pass key
+          # If we do, we're seeing a second for this section, so BAIL OUT
+          if [[ $SECTION_TSOCKS != "" ]]
+          then
+            echo "Error: Your config file has a syntax error in section $SECTION_NAME"
+            echo "Error: A second pass key declaration was encountered."
+            exit 1
+          else
+            # Capture the tsocks value
+            SECTION_TSOCKS=${INPUT_LINE:7}
+          fi
+
         elif [[ ${INPUT_LINE:0:8} == "confirm=" ]]
         then
           #echo "Found confirm"
@@ -226,6 +243,7 @@ function load_config_file {
                   $SECTION_KNIFE_CFG == "" || \
                   $SECTION_SSH_USER  == "" || \
                   $SECTION_PASS_KEY  == "" || \
+                  $SECTION_TSOCKS    == "" || \
                   $SECTION_CONFIRM   == "" ]]
             then
               echo "Error: Section $SECTION_NAME is missing a value."
@@ -255,6 +273,11 @@ function load_config_file {
                 echo "Error: Missing 'confirm=' declaration"
               fi
 
+              if [[ -z $SECTION_TSOCKS ]]
+              then
+                echo "Error: Missing 'tsocks=' declaration"
+              fi
+
               exit 1
             fi
 
@@ -265,6 +288,7 @@ function load_config_file {
                   $SECTION_KNIFE_CFG != "" && \
                   $SECTION_SSH_USER  != "" && \
                   $SECTION_PASS_KEY  != "" && \
+                  $SECTION_TSOCKS    != "" && \
                   $SECTION_CONFIRM   != "" ]]
             then
 
@@ -289,6 +313,7 @@ function load_config_file {
                 #echo "SECTION_KNIFE_CFG: |$SECTION_KNIFE_CFG|"
                 #echo "SECTION_SSH_USER:  |$SECTION_SSH_USER|"
                 #echo "SECTION_PASS_KEY:  |$SECTION_PASS_KEY|"
+                #echo "SECTION_TSOCKS:    |$SECTION_PASS_KEY|"
                 #echo "SECTION_CONFIRM:   |$SECTION_CONFIRM|"
 
                 LIST_ENV[$IDX]="$SECTION_NAME"
@@ -296,6 +321,7 @@ function load_config_file {
                 LIST_KNIFE[$IDX]="$SECTION_KNIFE_CFG"
                 LIST_USER[$IDX]="$SECTION_SSH_USER"
                 LIST_PASS[$IDX]="$SECTION_PASS_KEY"
+                LIST_TSOCKS[$IDX]="$SECTION_TSOCKS"
                 LIST_CONFIRM[$IDX]="$SECTION_CONFIRM"
 
                 if [[ -n "$DEBUG" ]]
@@ -307,7 +333,8 @@ function load_config_file {
                   echo "LIST_KNIFE   |${LIST_KNIFE[$IDX]}|"
                   echo "LIST_USER    |${LIST_USER[$IDX]}|"
                   echo "LIST_PASS    |${LIST_PASS[$IDX]}|"
-                  echo "LIST_CONFIRM |${LIST_PASS[$IDX]}|"
+                  echo "LIST_TSOCKS  |${LIST_TSOCKS[$IDX]}|"
+                  echo "LIST_CONFIRM |${LIST_CONFIRM[$IDX]}|"
                 fi
 
                 # Increment our counter by 1 for next element
@@ -319,6 +346,7 @@ function load_config_file {
                 SECTION_KNIFE_CFG=""
                 SECTION_SSH_USER=""
                 SECTION_PASS_KEY=""
+                SECTION_TSOCKS=""
                 SECTION_CONFIRM=""
             
               fi
@@ -463,6 +491,7 @@ function list_config_items {
     echo "    Knife Config: ${LIST_KNIFE[$IDX]}"
     echo "    SSH User:     ${LIST_USER[$IDX]}"
     echo "    PASS Key:     ${LIST_PASS[$IDX]}"
+    echo "    TSOCKS Key:     ${LIST_TSOCKS[$IDX]}"
     echo "    Confirm SSH:  ${LIST_CONFIRM[$IDX]}"
     echo
   done
@@ -478,6 +507,7 @@ declare -a LIST_DESC
 declare -a LIST_KNIFE
 declare -a LIST_USER
 declare -a LIST_PASS
+declare -a LIST_TSOCKS
 declare -a LIST_CONFIRM
 
 # Operational (non-option) parameters provided by the user
@@ -589,7 +619,7 @@ do
   then
     if [[ -n "$DEBUG" ]]
     then
-      echo "[Found Env] | ${LIST_ENV[$IDX]} | ${LIST_DESC[$IDX]} | ${LIST_KNIFE[$IDX]} | ${LIST_USER[$IDX]} | ${LIST_PASS[$IDX]}"
+      echo "[Found Env] | ${LIST_ENV[$IDX]} | ${LIST_DESC[$IDX]} | ${LIST_KNIFE[$IDX]} | ${LIST_USER[$IDX]} | ${LIST_PASS[$IDX]} ${LIST_TSOCKS[$IDX]} ${LIST_CONFIRM[$IDX]}"
     fi
 
     # Capture array values; later use will be more readable than array accesses
@@ -598,6 +628,8 @@ do
     USE_KNIFE="${LIST_KNIFE[$IDX]}"
     USE_USER="${LIST_USER[$IDX]}"
     USE_PASS="${LIST_PASS[$IDX]}"
+    USE_TSOCKS="${LIST_TSOCKS[$IDX]}"
+    USE_CONFIRM="${LIST_CONFIRM[$IDX]}"
 
     # Stop searching the array
     break
@@ -660,14 +692,26 @@ then
     echo knife "$@" --config "$USE_KNIFE" -x $USE_USER -P $USE_PASSWORD
   fi
 
-  # Call knife with a password to facilitate 'knife ssh'
-  knife "$@" --config "$USE_KNIFE" -x $USE_USER -P $USE_PASSWORD
+  if [[ $USE_TSOCKS == "yes" ]]
+  then
+    # Call knife with a password to facilitate 'knife ssh'
+    knife "$@" --config "$USE_KNIFE" -x $USE_USER -P $USE_PASSWORD
+  else
+    # Call knife with a password to facilitate 'knife ssh'
+    knife "$@" --config "$USE_KNIFE" -x $USE_USER -P $USE_PASSWORD
+  fi
 else
   if [[ -n "$DEBUG" ]]
   then
     echo knife "$@" --config "$USE_KNIFE"
   fi
 
-  # Call knife without a password
-  knife "$@" --config "$USE_KNIFE"
+  if [[ $USE_TSOCKS == "yes" ]]
+  then
+    # Call knife without a password
+    knife "$@" --config "$USE_KNIFE"
+  else
+    # Call knife without a password
+    knife "$@" --config "$USE_KNIFE"
+  fi
 fi

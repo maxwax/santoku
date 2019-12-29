@@ -7,10 +7,15 @@
 #
 
 # Set the version
-VERSION="2015.0504.01"
+VERSION="1.1.0"
+VERSION_DATE="2018.12.28"
 
 # Define a config file location
-CONFIG_FILE=$HOME/.santoku-config
+CONFIG_FILE=$HOME/.santoku.conf
+
+# Put this in the config file later when there is time, needs to be
+# flexible between MacOS, Ubuntu, Redhat, etc.
+PROXYCHAINS_CMD="proxychains4 -q"
 
 #
 # Functions
@@ -47,7 +52,7 @@ function capture_parameters {
 
     if [[ "$1" != "" ]]
     then
-      # Capture ALL remaining parameters 
+      # Capture ALL remaining parameters
       # We want to pass through unexpected knife commands, too
       CLI_COMMAND="$@"
     fi
@@ -124,7 +129,7 @@ function load_config_file {
             SECTION_KNIFE_CFG=""
             SECTION_SSH_USER=""
             SECTION_PASS_KEY=""
-            SECTION_TSOCKS=""
+            SECTION_PROXYCHAINS=""
 
           fi
 
@@ -193,20 +198,20 @@ function load_config_file {
             SECTION_PASS_KEY=${INPUT_LINE:9}
           fi
 
-        elif [[ ${INPUT_LINE:0:7} == "tsocks=" ]]
+        elif [[ ${INPUT_LINE:0:12} == "proxychains=" ]]
         then
-          #echo "Found tsocks"
+          #echo "Found proxychains"
 
           # Verify that we do not already have a setting for pass key
           # If we do, we're seeing a second for this section, so BAIL OUT
-          if [[ $SECTION_TSOCKS != "" ]]
+          if [[ $SECTION_PROXYCHAINS != "" ]]
           then
             echo "Error: Your config file has a syntax error in section $SECTION_NAME"
             echo "Error: A second pass key declaration was encountered."
             exit 1
           else
-            # Capture the tsocks value
-            SECTION_TSOCKS=${INPUT_LINE:7}
+            # Capture the proxychains value
+            SECTION_PROXYCHAINS=${INPUT_LINE:12}
           fi
 
         elif [[ ${INPUT_LINE:0:8} == "confirm=" ]]
@@ -236,14 +241,14 @@ function load_config_file {
 
           else
 
-            # If we're processing a section 
+            # If we're processing a section
             # and any parameter is missing, bail out
             if [[ $SECTION_NAME      != "" && \
                   $SECTION_DESC      == "" || \
                   $SECTION_KNIFE_CFG == "" || \
                   $SECTION_SSH_USER  == "" || \
                   $SECTION_PASS_KEY  == "" || \
-                  $SECTION_TSOCKS    == "" || \
+                  $SECTION_PROXYCHAINS    == "" || \
                   $SECTION_CONFIRM   == "" ]]
             then
               echo "Error: Section $SECTION_NAME is missing a value."
@@ -273,9 +278,9 @@ function load_config_file {
                 echo "Error: Missing 'confirm=' declaration"
               fi
 
-              if [[ -z $SECTION_TSOCKS ]]
+              if [[ -z $SECTION_PROXYCHAINS ]]
               then
-                echo "Error: Missing 'tsocks=' declaration"
+                echo "Error: Missing 'proxychains=' declaration"
               fi
 
               exit 1
@@ -288,7 +293,7 @@ function load_config_file {
                   $SECTION_KNIFE_CFG != "" && \
                   $SECTION_SSH_USER  != "" && \
                   $SECTION_PASS_KEY  != "" && \
-                  $SECTION_TSOCKS    != "" && \
+                  $SECTION_PROXYCHAINS    != "" && \
                   $SECTION_CONFIRM   != "" ]]
             then
 
@@ -313,7 +318,7 @@ function load_config_file {
                 #echo "SECTION_KNIFE_CFG: |$SECTION_KNIFE_CFG|"
                 #echo "SECTION_SSH_USER:  |$SECTION_SSH_USER|"
                 #echo "SECTION_PASS_KEY:  |$SECTION_PASS_KEY|"
-                #echo "SECTION_TSOCKS:    |$SECTION_PASS_KEY|"
+                #echo "SECTION_PROXYCHAINS:    |$SECTION_PASS_KEY|"
                 #echo "SECTION_CONFIRM:   |$SECTION_CONFIRM|"
 
                 LIST_ENV[$IDX]="$SECTION_NAME"
@@ -321,7 +326,7 @@ function load_config_file {
                 LIST_KNIFE[$IDX]="$SECTION_KNIFE_CFG"
                 LIST_USER[$IDX]="$SECTION_SSH_USER"
                 LIST_PASS[$IDX]="$SECTION_PASS_KEY"
-                LIST_TSOCKS[$IDX]="$SECTION_TSOCKS"
+                LIST_PROXYCHAINS[$IDX]="$SECTION_PROXYCHAINS"
                 LIST_CONFIRM[$IDX]="$SECTION_CONFIRM"
 
                 if [[ -n "$DEBUG" ]]
@@ -333,7 +338,7 @@ function load_config_file {
                   echo "LIST_KNIFE   |${LIST_KNIFE[$IDX]}|"
                   echo "LIST_USER    |${LIST_USER[$IDX]}|"
                   echo "LIST_PASS    |${LIST_PASS[$IDX]}|"
-                  echo "LIST_TSOCKS  |${LIST_TSOCKS[$IDX]}|"
+                  echo "LIST_PROXYCHAINS  |${LIST_PROXYCHAINS[$IDX]}|"
                   echo "LIST_CONFIRM |${LIST_CONFIRM[$IDX]}|"
                 fi
 
@@ -346,9 +351,9 @@ function load_config_file {
                 SECTION_KNIFE_CFG=""
                 SECTION_SSH_USER=""
                 SECTION_PASS_KEY=""
-                SECTION_TSOCKS=""
+                SECTION_PROXYCHAINS=""
                 SECTION_CONFIRM=""
-            
+
               fi
             fi
           fi
@@ -491,7 +496,7 @@ function list_config_items {
     echo "    Knife Config: ${LIST_KNIFE[$IDX]}"
     echo "    SSH User:     ${LIST_USER[$IDX]}"
     echo "    PASS Key:     ${LIST_PASS[$IDX]}"
-    echo "    TSOCKS Key:     ${LIST_TSOCKS[$IDX]}"
+    echo "    PROXYCHAINS Key:     ${LIST_PROXYCHAINS[$IDX]}"
     echo "    Confirm SSH:  ${LIST_CONFIRM[$IDX]}"
     echo
   done
@@ -507,7 +512,7 @@ declare -a LIST_DESC
 declare -a LIST_KNIFE
 declare -a LIST_USER
 declare -a LIST_PASS
-declare -a LIST_TSOCKS
+declare -a LIST_PROXYCHAINS
 declare -a LIST_CONFIRM
 
 # Operational (non-option) parameters provided by the user
@@ -539,7 +544,7 @@ then
 fi
 
 # While length of $1 is not zero
-while [ "$1" != "" ]  
+while [ "$1" != "" ]
 do
 
   case $1 in
@@ -555,7 +560,7 @@ do
       exit 0;;
 
     # I don't know what I want! Help me!
-    "-h" | "--help" | "--syntax") 
+    "-h" | "--help" | "--syntax")
       usage
       exit 0;;
 
@@ -580,10 +585,10 @@ do
         break
       fi
     ;;
-  esac 
+  esac
 
   shift
-done 
+done
 
 #
 # Config file: Read one in or make a template file
@@ -611,7 +616,7 @@ for IDX in $(seq 0 $LIST_COUNT_ZERO_START)
 do
   if [[ -n "$DEBUG" ]]
   then
-    echo ${LIST_ENV[$IDX]} "|" $CLI_ENV 
+    echo ${LIST_ENV[$IDX]} "|" $CLI_ENV
   fi
 
   # If this array element matches our selected resource, use its values
@@ -619,7 +624,7 @@ do
   then
     if [[ -n "$DEBUG" ]]
     then
-      echo "[Found Env] | ${LIST_ENV[$IDX]} | ${LIST_DESC[$IDX]} | ${LIST_KNIFE[$IDX]} | ${LIST_USER[$IDX]} | ${LIST_PASS[$IDX]} ${LIST_TSOCKS[$IDX]} ${LIST_CONFIRM[$IDX]}"
+      echo "[Found Env] | ${LIST_ENV[$IDX]} | ${LIST_DESC[$IDX]} | ${LIST_KNIFE[$IDX]} | ${LIST_USER[$IDX]} | ${LIST_PASS[$IDX]} ${LIST_PROXYCHAINS[$IDX]} ${LIST_CONFIRM[$IDX]}"
     fi
 
     # Capture array values; later use will be more readable than array accesses
@@ -628,7 +633,7 @@ do
     USE_KNIFE="${LIST_KNIFE[$IDX]}"
     USE_USER="${LIST_USER[$IDX]}"
     USE_PASS="${LIST_PASS[$IDX]}"
-    USE_TSOCKS="${LIST_TSOCKS[$IDX]}"
+    USE_PROXYCHAINS="${LIST_PROXYCHAINS[$IDX]}"
     USE_CONFIRM="${LIST_CONFIRM[$IDX]}"
 
     # Stop searching the array
@@ -674,7 +679,7 @@ then
 
     # Ask the user for a password
     read -s -p "Specify a password for $USE_USER :" USE_PASSWORD
-    
+
     # Force newline since read appears to capture the newline
     echo
 
@@ -692,24 +697,34 @@ then
     echo knife "$@" --config "$USE_KNIFE" -x $USE_USER -P $USE_PASSWORD
   fi
 
-  if [[ $USE_TSOCKS == "yes" ]]
+  if [[ $USE_PROXYCHAINS == "yes" ]]
   then
     # Call knife with a password to facilitate 'knife ssh'
-    knife "$@" --config "$USE_KNIFE" -x $USE_USER -P $USE_PASSWORD
+    if [[ $1 == "ssh" ]]
+    then
+      proxychains4 -q knife "$@" --config "$USE_KNIFE" -x $USE_USER -P $USE_PASSWORD
+    else
+      proxychains4 -q knife "$@" --config "$USE_KNIFE" -x $USE_USER -P $USE_PASSWORD
+    fi
   else
     # Call knife with a password to facilitate 'knife ssh'
     knife "$@" --config "$USE_KNIFE" -x $USE_USER -P $USE_PASSWORD
   fi
 else
+
+  #
+  # This is not a 'knife ssh' remote access command but some other knife command
+  #
+
   if [[ -n "$DEBUG" ]]
   then
     echo knife "$@" --config "$USE_KNIFE"
   fi
 
-  if [[ $USE_TSOCKS == "yes" ]]
+  if [[ $USE_PROXYCHAINS == "yes" ]]
   then
     # Call knife without a password
-    knife "$@" --config "$USE_KNIFE"
+    proxychains4 -q knife "$@" --config "$USE_KNIFE"
   else
     # Call knife without a password
     knife "$@" --config "$USE_KNIFE"
